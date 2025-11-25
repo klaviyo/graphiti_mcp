@@ -168,7 +168,7 @@ class QueueService:
         effective_reference_time = reference_time
         if effective_reference_time is None:
             # Try to extract from JSON content
-            from graphiti_core.models.episodes.episode_type import EpisodeType
+            from graphiti_core.nodes import EpisodeType
 
             if episode_type == EpisodeType.json:
                 effective_reference_time = self._extract_reference_time_from_json(content)

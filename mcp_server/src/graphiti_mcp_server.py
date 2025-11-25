@@ -197,7 +197,7 @@ class GraphitiService:
 
             # Use built-in entity types from entity_types.py if enabled (default: True)
             if self.config.graphiti.use_default_entity_types:
-                from mcp_server.src.models.entity_types import ENTITY_TYPES
+                from models.entity_types import ENTITY_TYPES
 
                 custom_types.update(ENTITY_TYPES)
                 logger.info(f'Loaded {len(ENTITY_TYPES)} built-in entity types')

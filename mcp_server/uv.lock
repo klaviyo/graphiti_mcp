@@ -718,7 +718,7 @@ wheels = [
 [[package]]
 name = "graphiti-core"
 version = "0.26.3"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../" }
 dependencies = [
     { name = "diskcache" },
     { name = "neo4j" },

@@ -166,7 +166,9 @@ class GraphitiService:
         self.semaphore_limit = semaphore_limit
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.client: Graphiti | None = None
-        self.entity_types = None
+        self.entity_types: dict[str, type[BaseModel]] | None = None
+        self.edge_types: dict[str, type[BaseModel]] | None = None
+        self.edge_type_map: dict[tuple[str, str], list[str]] | None = None
 
     async def initialize(self) -> None:
         """Initialize the Graphiti client with factory-created components."""
@@ -190,13 +192,20 @@ class GraphitiService:
             # Get database configuration
             db_config = DatabaseDriverFactory.create_config(self.config.database)
 
-            # Build entity types from configuration
-            custom_types = None
+            # Build entity types - use built-in types by default, merge with config overrides
+            custom_types: dict[str, type[BaseModel]] = {}
+
+            # Use built-in entity types from entity_types.py if enabled (default: True)
+            if self.config.graphiti.use_default_entity_types:
+                from mcp_server.src.models.entity_types import ENTITY_TYPES
+
+                custom_types.update(ENTITY_TYPES)
+                logger.info(f'Loaded {len(ENTITY_TYPES)} built-in entity types')
+
+            # Add/override with config-defined entity types
             if self.config.graphiti.entity_types:
-                custom_types = {}
                 for entity_type in self.config.graphiti.entity_types:
                     # Create a dynamic Pydantic model for each entity type
-                    # Note: Don't use 'name' as it's a protected Pydantic attribute
                     entity_model = type(
                         entity_type.name,
                         (BaseModel,),
@@ -205,9 +214,41 @@ class GraphitiService:
                         },
                     )
                     custom_types[entity_type.name] = entity_model
+                logger.info(
+                    f'Added {len(self.config.graphiti.entity_types)} config-defined entity types'
+                )
 
             # Store entity types for later use
-            self.entity_types = custom_types
+            self.entity_types = custom_types if custom_types else None
+
+            # Build edge types from configuration
+            edge_types: dict[str, type[BaseModel]] = {}
+            edge_type_map: dict[tuple[str, str], list[str]] = {}
+
+            if self.config.graphiti.edge_types:
+                for edge_type_config in self.config.graphiti.edge_types:
+                    # Create a dynamic Pydantic model for each edge type
+                    edge_model = type(
+                        edge_type_config.name,
+                        (BaseModel,),
+                        {
+                            '__doc__': edge_type_config.description,
+                        },
+                    )
+                    edge_types[edge_type_config.name] = edge_model
+
+                    # Build edge_type_map: (source_type, target_type) -> [edge_type_names]
+                    for source_type in edge_type_config.source_entity_types:
+                        for target_type in edge_type_config.target_entity_types:
+                            key = (source_type, target_type)
+                            if key not in edge_type_map:
+                                edge_type_map[key] = []
+                            edge_type_map[key].append(edge_type_config.name)
+
+                logger.info(f'Loaded {len(edge_types)} edge types with type mappings')
+
+            self.edge_types = edge_types if edge_types else None
+            self.edge_type_map = edge_type_map if edge_type_map else None
 
             # Initialize Graphiti client with appropriate driver
             try:
@@ -334,9 +375,15 @@ class GraphitiService:
 
             if self.entity_types:
                 entity_type_names = list(self.entity_types.keys())
-                logger.info(f'Using custom entity types: {", ".join(entity_type_names)}')
+                logger.info(f'Using entity types: {", ".join(entity_type_names)}')
             else:
-                logger.info('Using default entity types')
+                logger.info('No custom entity types configured')
+
+            if self.edge_types:
+                edge_type_names = list(self.edge_types.keys())
+                logger.info(f'Using edge types: {", ".join(edge_type_names)}')
+            else:
+                logger.info('No custom edge types configured - using default RELATES_TO')
 
             logger.info(f'Using database: {self.config.database.provider}')
             logger.info(f'Using group_id: {self.config.graphiti.group_id}')
@@ -362,6 +409,7 @@ async def add_memory(
     source: str = 'text',
     source_description: str = '',
     uuid: str | None = None,
+    update_communities: bool = False,
 ) -> SuccessResponse | ErrorResponse:
     """Add an episode to memory. This is the primary way to add information to the graph.
 
@@ -381,6 +429,10 @@ async def add_memory(
                                - 'message': For conversation-style content
         source_description (str, optional): Description of the source
         uuid (str, optional): Optional UUID for the episode
+        update_communities (bool, optional): Whether to update community nodes after processing.
+                                            Community nodes enable graph summarization and community-based search.
+                                            Defaults to False for performance, but recommended for building
+                                            connected knowledge graphs.
 
     Examples:
         # Adding plain text content
@@ -392,13 +444,15 @@ async def add_memory(
             group_id="some_arbitrary_string"
         )
 
-        # Adding structured JSON data
+        # Adding structured JSON data with community updates
         # NOTE: episode_body should be a JSON string (standard JSON escaping)
+        # For JSON source, reference_time is automatically extracted from common timestamp fields
         add_memory(
             name="Customer Profile",
-            episode_body='{"company": {"name": "Acme Technologies"}, "products": [{"id": "P001", "name": "CloudSync"}, {"id": "P002", "name": "DataMiner"}]}',
+            episode_body='{"company": {"name": "Acme Technologies"}, "reference_time": "2025-01-15T10:30:00Z", "products": [{"id": "P001", "name": "CloudSync"}]}',
             source="json",
-            source_description="CRM data"
+            source_description="CRM data",
+            update_communities=True
         )
     """
     global graphiti_service, queue_service
@@ -429,6 +483,8 @@ async def add_memory(
             episode_type=episode_type,
             entity_types=graphiti_service.entity_types,
             uuid=uuid or None,  # Ensure None is passed if uuid is None
+            update_communities=update_communities,
+            edge_types=graphiti_service.edge_types,
         )
 
         return SuccessResponse(

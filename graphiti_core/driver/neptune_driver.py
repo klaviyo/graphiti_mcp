@@ -180,6 +180,10 @@ class NeptuneDriver(GraphDriver):
         aoss_hostname = aoss_host.replace('https://', '').replace('http://', '')
 
         session = boto3.Session()
+
+        # Configure OpenSearch client with retry and timeout settings
+        # AWS OpenSearch Serverless has aggressive connection limits and may close
+        # connections prematurely. These settings help handle transient failures.
         self.aoss_client = OpenSearch(
             hosts=[{'host': aoss_hostname, 'port': aoss_port}],
             http_auth=Urllib3AWSV4SignerAuth(
@@ -188,7 +192,10 @@ class NeptuneDriver(GraphDriver):
             use_ssl=True,
             verify_certs=True,
             connection_class=Urllib3HttpConnection,
-            pool_maxsize=20,
+            pool_maxsize=10,  # Reduced from 20 to avoid overwhelming AOSS connection limits
+            timeout=30,  # 30 second timeout to prevent hanging connections
+            max_retries=5,  # Enable retry logic with exponential backoff
+            retry_on_timeout=True,  # Retry when timeout occurs
         )
 
     def _sanitize_parameters(self, query, params: dict):

@@ -246,7 +246,7 @@ async def edge_fulltext_search(
                     e.created_at AS created_at,
                     e.name AS name,
                     e.fact AS fact,
-                    split(e.episodes, ",") AS episodes,
+                    CASE WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ",") END AS episodes,
                     e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
@@ -349,6 +349,10 @@ async def edge_similarity_search(
         search_vector_var = f'CAST($search_vector AS FLOAT[{len(search_vector)}])'
 
     if driver.provider == GraphProvider.NEPTUNE:
+        # Apply limit to prevent memory exhaustion when fetching embeddings
+        # Use a larger multiplier to ensure we have enough candidates for filtering
+        batch_limit = limit * 10
+
         query = (
             """
                             MATCH (n:Entity)-[e:RELATES_TO]->(m:Entity)
@@ -356,6 +360,7 @@ async def edge_similarity_search(
             + filter_query
             + """
             RETURN DISTINCT id(e) as id, e.fact_embedding as embedding
+            LIMIT $batch_limit
             """
         )
         resp, header, _ = await driver.execute_query(
@@ -363,6 +368,7 @@ async def edge_similarity_search(
             search_vector=search_vector,
             limit=limit,
             min_score=min_score,
+            batch_limit=batch_limit,
             routing_='r',
             **filter_params,
         )
@@ -533,7 +539,7 @@ async def edge_bfs_search(
                     e.created_at AS created_at,
                     e.name AS name,
                     e.fact AS fact,
-                    split(e.episodes, ',') AS episodes,
+                    CASE WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
                     e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
@@ -696,6 +702,10 @@ async def node_similarity_search(
         search_vector_var = f'CAST($search_vector AS FLOAT[{len(search_vector)}])'
 
     if driver.provider == GraphProvider.NEPTUNE:
+        # Apply limit to prevent memory exhaustion when fetching embeddings
+        # Use a larger multiplier to ensure we have enough candidates for filtering
+        batch_limit = limit * 10
+
         query = (
             """
                                                                                                                                     MATCH (n:Entity)
@@ -703,6 +713,7 @@ async def node_similarity_search(
             + filter_query
             + """
             RETURN DISTINCT id(n) as id, n.name_embedding as embedding
+            LIMIT $batch_limit
             """
         )
         resp, header, _ = await driver.execute_query(
@@ -711,6 +722,7 @@ async def node_similarity_search(
             search_vector=search_vector,
             limit=limit,
             min_score=min_score,
+            batch_limit=batch_limit,
             routing_='r',
         )
 
@@ -1079,6 +1091,10 @@ async def community_similarity_search(
         query_params['group_ids'] = group_ids
 
     if driver.provider == GraphProvider.NEPTUNE:
+        # Apply limit to prevent memory exhaustion when fetching embeddings
+        # Use a larger multiplier to ensure we have enough candidates for filtering
+        batch_limit = limit * 10
+
         query = (
             """
                                                                                                                                     MATCH (n:Community)
@@ -1086,6 +1102,7 @@ async def community_similarity_search(
             + group_filter_query
             + """
             RETURN DISTINCT id(n) as id, n.name_embedding as embedding
+            LIMIT $batch_limit
             """
         )
         resp, header, _ = await driver.execute_query(
@@ -1093,6 +1110,7 @@ async def community_similarity_search(
             search_vector=search_vector,
             limit=limit,
             min_score=min_score,
+            batch_limit=batch_limit,
             routing_='r',
             **query_params,
         )
@@ -1420,6 +1438,10 @@ async def get_relevant_edges(
         filter_query = ' WHERE ' + (' AND '.join(filter_queries))
 
     if driver.provider == GraphProvider.NEPTUNE:
+        # Apply limit to prevent memory exhaustion when fetching embeddings
+        # Limit results per edge to prevent memory issues with many matching edges
+        batch_limit = limit * 10
+
         query = (
             """
                                                                                                                                     UNWIND $edges AS edge
@@ -1430,6 +1452,7 @@ async def get_relevant_edges(
             WITH e, edge
             RETURN DISTINCT id(e) as id, e.fact_embedding as source_embedding, edge.uuid as search_edge_uuid,
             edge.fact_embedding as target_embedding
+            LIMIT $batch_limit
             """
         )
         resp, _, _ = await driver.execute_query(
@@ -1437,6 +1460,7 @@ async def get_relevant_edges(
             edges=[edge.model_dump() for edge in edges],
             limit=limit,
             min_score=min_score,
+            batch_limit=batch_limit,
             routing_='r',
             **filter_params,
         )
@@ -1466,8 +1490,8 @@ async def get_relevant_edges(
                 name: e.name,
                 group_id: e.group_id,
                 fact: e.fact,
-                fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
-                episodes: split(e.episodes, ","),
+                fact_embedding: CASE WHEN e.fact_embedding IS NULL OR e.fact_embedding = '' THEN [] ELSE [x IN split(e.fact_embedding, ",") | toFloat(x)] END,
+                episodes: CASE WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ",") END,
                 expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,
@@ -1605,6 +1629,10 @@ async def get_edge_invalidation_candidates(
         filter_query = ' AND ' + (' AND '.join(filter_queries))
 
     if driver.provider == GraphProvider.NEPTUNE:
+        # Apply limit to prevent memory exhaustion when fetching embeddings
+        # Limit results per edge to prevent memory issues with many matching edges
+        batch_limit = limit * 10
+
         query = (
             """
                                                                                                                                     UNWIND $edges AS edge
@@ -1617,6 +1645,7 @@ async def get_edge_invalidation_candidates(
             RETURN DISTINCT id(e) as id, e.fact_embedding as source_embedding,
             edge.fact_embedding as target_embedding,
             edge.uuid as search_edge_uuid
+            LIMIT $batch_limit
             """
         )
         resp, _, _ = await driver.execute_query(
@@ -1624,6 +1653,7 @@ async def get_edge_invalidation_candidates(
             edges=[edge.model_dump() for edge in edges],
             limit=limit,
             min_score=min_score,
+            batch_limit=batch_limit,
             routing_='r',
             **filter_params,
         )
@@ -1653,8 +1683,8 @@ async def get_edge_invalidation_candidates(
                 name: e.name,
                 group_id: e.group_id,
                 fact: e.fact,
-                fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
-                episodes: split(e.episodes, ","),
+                fact_embedding: CASE WHEN e.fact_embedding IS NULL OR e.fact_embedding = '' THEN [] ELSE [x IN split(e.fact_embedding, ",") | toFloat(x)] END,
+                episodes: CASE WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ",") END,
                 expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,

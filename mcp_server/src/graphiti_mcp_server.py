@@ -1034,7 +1034,27 @@ async def run_mcp_server():
         # Configure uvicorn logging to match our format
         configure_uvicorn_logging()
 
-        await mcp.run_streamable_http_async()
+        # Wrap the FastMCP app with TrustedHostMiddleware to allow all hosts
+        # This prevents Host header validation issues in Kubernetes environments
+        import uvicorn
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+        # Get the Starlette app from FastMCP
+        app = mcp.streamable_http_app()
+
+        # Wrap with TrustedHostMiddleware configured to allow all hosts
+        wrapped_app = TrustedHostMiddleware(app, allowed_hosts=['*'])
+        logger.info('Host header validation: disabled (allowing all hosts for Kubernetes compatibility)')
+
+        # Run uvicorn directly with the wrapped app
+        config = uvicorn.Config(
+            wrapped_app,
+            host=mcp.settings.host,
+            port=mcp.settings.port,
+            log_config=None,  # Use our custom logging
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
     else:
         raise ValueError(
             f'Unsupported transport: {mcp_config.transport}. Use "sse", "stdio", or "http"'

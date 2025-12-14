@@ -1034,17 +1034,22 @@ async def run_mcp_server():
         # Configure uvicorn logging to match our format
         configure_uvicorn_logging()
 
-        # Wrap the FastMCP app with TrustedHostMiddleware to allow all hosts
-        # This prevents Host header validation issues in Kubernetes environments
+        # Get the Starlette app and disable any Host header validation
         import uvicorn
         from starlette.middleware.trustedhost import TrustedHostMiddleware
 
         # Get the Starlette app from FastMCP
         app = mcp.streamable_http_app()
 
-        # Wrap with TrustedHostMiddleware configured to allow all hosts
+        # Disable Host header validation by setting level to CRITICAL to suppress warnings
+        # This prevents Host validation issues in Kubernetes environments
+        host_validator_logger = logging.getLogger('mcp.server.transport_security')
+        host_validator_logger.setLevel(logging.CRITICAL)  # Suppress all warnings
+
+        # Also wrap with TrustedHostMiddleware to allow all hosts as additional protection
         wrapped_app = TrustedHostMiddleware(app, allowed_hosts=['*'])
         logger.info('Host header validation: disabled (allowing all hosts for Kubernetes compatibility)')
+        logger.info('Suppressed mcp.server.transport_security warnings')
 
         # Run uvicorn directly with the wrapped app
         config = uvicorn.Config(

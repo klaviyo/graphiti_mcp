@@ -82,6 +82,12 @@ class ServerConfig(BaseModel):
     )
     host: str = Field(default='0.0.0.0', description='Server host')
     port: int = Field(default=8000, description='Server port')
+    allowed_hosts: list[str] = Field(
+        default_factory=lambda: ['*'],
+        description='List of allowed Host header values. Use ["*"] to allow all hosts. '
+        'For Kubernetes deployments, include service names like '
+        '"service-name.namespace.svc.cluster.local"',
+    )
 
 
 class OpenAIProviderConfig(BaseModel):

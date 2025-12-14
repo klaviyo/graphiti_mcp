@@ -5,6 +5,9 @@ server:
   transport: "http"  # HTTP transport (SSE is deprecated)
   host: "0.0.0.0"
   port: 8000
+  # allowed_hosts: ["*"]  # Allow all hosts (default)
+  # For Kubernetes deployments, specify the service name:
+  # allowed_hosts: ["localhost", "your-service.namespace.svc.cluster.local"]
 
 llm:
   provider: "openai"  # Options: openai, azure_openai, anthropic, gemini, groq

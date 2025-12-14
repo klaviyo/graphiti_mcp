@@ -992,6 +992,9 @@ async def initialize_server() -> ServerConfig:
         mcp.settings.host = config.server.host
     if config.server.port:
         mcp.settings.port = config.server.port
+    if config.server.allowed_hosts:
+        mcp.settings.allowed_hosts = config.server.allowed_hosts
+        logger.info(f'Configured allowed hosts: {config.server.allowed_hosts}')
 
     # Return MCP configuration for transport
     return config.server

@@ -444,8 +444,7 @@ async def resolve_extracted_edges(
     resolved_edges: list[EntityEdge] = []
     invalidated_edges: list[EntityEdge] = []
     for result in results:
-        resolved_edge = result[0]
-        invalidated_edge_chunk = result[1]
+        resolved_edge, invalidated_edge_chunk, _ = result  # Third value (duplicate_edges) not needed here
 
         resolved_edges.append(resolved_edge)
         invalidated_edges.extend(invalidated_edge_chunk)

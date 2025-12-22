@@ -92,6 +92,12 @@ logging.getLogger('uvicorn.access').setLevel(logging.WARNING)  # Reduce access l
 logging.getLogger('mcp.server.streamable_http_manager').setLevel(
     logging.WARNING
 )  # Reduce MCP noise
+logging.getLogger('opensearch').setLevel(
+    logging.ERROR
+)  # Only log actual errors, not transient warnings
+logging.getLogger('urllib3.connectionpool').setLevel(
+    logging.ERROR
+)  # Suppress retry warnings
 
 
 # Patch uvicorn's logging config to use our format

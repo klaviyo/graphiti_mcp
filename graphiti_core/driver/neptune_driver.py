@@ -196,6 +196,7 @@ class NeptuneDriver(GraphDriver):
             timeout=30,  # 30 second timeout to prevent hanging connections
             max_retries=5,  # Enable retry logic with exponential backoff
             retry_on_timeout=True,  # Retry when timeout occurs
+            retry_on_status=[502, 503, 504],  # Retry on gateway errors and service unavailable
         )
 
     def _sanitize_parameters(self, query, params: dict):

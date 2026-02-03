@@ -1040,7 +1040,8 @@ async def run_mcp_server():
         # Configure uvicorn logging to match our format
         configure_uvicorn_logging()
 
-        await mcp.run_streamable_http_async()
+        # Use mcp.run() which properly initializes the task group
+        await mcp.run(transport='http')
     else:
         raise ValueError(
             f'Unsupported transport: {mcp_config.transport}. Use "sse", "stdio", or "http"'

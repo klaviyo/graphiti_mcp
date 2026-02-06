@@ -1040,8 +1040,8 @@ async def run_mcp_server():
         # Configure uvicorn logging to match our format
         configure_uvicorn_logging()
 
-        # Use mcp.run() which properly initializes the task group
-        await mcp.run(transport='http')
+        # Use mcp.run() without parameters - FastMCP auto-detects HTTP transport from settings
+        await mcp.run()
     else:
         raise ValueError(
             f'Unsupported transport: {mcp_config.transport}. Use "sse", "stdio", or "http"'

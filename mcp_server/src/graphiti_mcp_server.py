@@ -1004,7 +1004,7 @@ async def initialize_server() -> ServerConfig:
 
 
 async def run_mcp_server():
-    """Run the MCP server in the current event loop."""
+    """Run the MCP server in the current event loop (for stdio/sse only)."""
     # Initialize the server
     mcp_config = await initialize_server()
 
@@ -1018,41 +1018,57 @@ async def run_mcp_server():
         )
         logger.info(f'Access the server at: http://{mcp.settings.host}:{mcp.settings.port}/sse')
         await mcp.run_sse_async()
-    elif mcp_config.transport == 'http':
-        # Use localhost for display if binding to 0.0.0.0
-        display_host = 'localhost' if mcp.settings.host == '0.0.0.0' else mcp.settings.host
-        logger.info(
-            f'Running MCP server with streamable HTTP transport on {mcp.settings.host}:{mcp.settings.port}'
-        )
-        logger.info('=' * 60)
-        logger.info('MCP Server Access Information:')
-        logger.info(f'  Base URL: http://{display_host}:{mcp.settings.port}/')
-        logger.info(f'  MCP Endpoint: http://{display_host}:{mcp.settings.port}/mcp/')
-        logger.info('  Transport: HTTP (streamable)')
-
-        # Show FalkorDB Browser UI access if enabled
-        if os.environ.get('BROWSER', '1') == '1':
-            logger.info(f'  FalkorDB Browser UI: http://{display_host}:3000/')
-
-        logger.info('=' * 60)
-        logger.info('For MCP clients, connect to the /mcp/ endpoint above')
-
-        # Configure uvicorn logging to match our format
-        configure_uvicorn_logging()
-
-        # Use mcp.run() without parameters - FastMCP auto-detects HTTP transport from settings
-        await mcp.run()
     else:
         raise ValueError(
-            f'Unsupported transport: {mcp_config.transport}. Use "sse", "stdio", or "http"'
+            f'Unsupported transport: {mcp_config.transport}. Use "sse" or "stdio" for async mode'
         )
 
 
 def main():
     """Main function to run the Graphiti MCP server."""
     try:
-        # Run everything in a single event loop
-        asyncio.run(run_mcp_server())
+        # Parse config to determine transport type
+        # Set CONFIG_PATH env var for GraphitiConfig to load from
+        if 'CONFIG_PATH' not in os.environ:
+            os.environ['CONFIG_PATH'] = os.environ.get('GRAPHITI_CONFIG_PATH', 'config/config.yaml')
+
+        from config.schema import GraphitiConfig
+        config = GraphitiConfig()
+
+        if config.server.transport == 'http':
+            # For HTTP transport, run initialization in event loop then call mcp.run() directly
+            # mcp.run() manages its own event loop, so we can't call it from within asyncio.run()
+            async def init_only():
+                await initialize_server()
+
+            asyncio.run(init_only())
+
+            # Use localhost for display if binding to 0.0.0.0
+            display_host = 'localhost' if config.server.host == '0.0.0.0' else config.server.host
+            logger.info(
+                f'Running MCP server with streamable HTTP transport on {config.server.host}:{config.server.port}'
+            )
+            logger.info('=' * 60)
+            logger.info('MCP Server Access Information:')
+            logger.info(f'  Base URL: http://{display_host}:{config.server.port}/')
+            logger.info(f'  MCP Endpoint: http://{display_host}:{config.server.port}/mcp/')
+            logger.info('  Transport: HTTP (streamable)')
+
+            # Show FalkorDB Browser UI access if enabled
+            if os.environ.get('BROWSER', '1') == '1':
+                logger.info(f'  FalkorDB Browser UI: http://{display_host}:3000/')
+
+            logger.info('=' * 60)
+            logger.info('For MCP clients, connect to the /mcp/ endpoint above')
+
+            # Configure uvicorn logging to match our format
+            configure_uvicorn_logging()
+
+            # Call mcp.run() directly - it manages its own event loop
+            mcp.run()
+        else:
+            # For stdio/sse transports, use async mode
+            asyncio.run(run_mcp_server())
     except KeyboardInterrupt:
         logger.info('Server shutting down...')
     except Exception as e:

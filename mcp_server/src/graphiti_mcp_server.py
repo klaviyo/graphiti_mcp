@@ -1036,8 +1036,7 @@ def main():
         config = GraphitiConfig()
 
         if config.server.transport == 'http':
-            # For HTTP transport, run initialization in event loop then call mcp.run() directly
-            # mcp.run() manages its own event loop, so we can't call it from within asyncio.run()
+            # For HTTP transport, initialize then run with uvicorn
             async def init_only():
                 await initialize_server()
 
@@ -1064,8 +1063,14 @@ def main():
             # Configure uvicorn logging to match our format
             configure_uvicorn_logging()
 
-            # Call mcp.run() directly - it manages its own event loop
-            mcp.run()
+            # Run the ASGI app with uvicorn - this properly handles all async lifecycle
+            import uvicorn
+            uvicorn.run(
+                mcp.streamable_http_app,
+                host=config.server.host,
+                port=config.server.port,
+                log_config=None,  # Use our custom logging configuration
+            )
         else:
             # For stdio/sse transports, use async mode
             asyncio.run(run_mcp_server())

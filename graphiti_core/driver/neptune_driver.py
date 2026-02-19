@@ -436,7 +436,18 @@ class NeptuneDriverSession(GraphDriverSession):
         if isinstance(query, list):
             res = None
             for q in query:
-                res = await self.driver.execute_query(q, **kwargs)
+                # Handle both tuple (query, params) format and plain string queries
+                if isinstance(q, tuple):
+                    if len(q) >= 2:
+                        # Unpack query and params from tuple
+                        query_str, params = q[0], q[1]
+                        res = await self.driver.execute_query(query_str, **params)
+                    else:
+                        # Single element tuple, treat as query string
+                        res = await self.driver.execute_query(str(q[0]), **kwargs)
+                else:
+                    # Plain string query
+                    res = await self.driver.execute_query(q, **kwargs)
             return res
         else:
             return await self.driver.execute_query(str(query), **kwargs)

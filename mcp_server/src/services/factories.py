@@ -483,6 +483,8 @@ class DatabaseDriverFactory:
                 env_aoss_port = os.environ.get('AOSS_PORT')
                 env_region = os.environ.get('AWS_REGION')
 
+                from config.schema import NeptuneProviderConfig
+
                 if config.providers.neptune:
                     neptune_config = config.providers.neptune
                     # Apply environment overrides
@@ -493,29 +495,28 @@ class DatabaseDriverFactory:
                     region_override = env_region or region or neptune_config.region
                 else:
                     # No config provided, use environment variables with defaults
-                    from config.schema import NeptuneProviderConfig
-
                     host = env_host or 'neptune-db://localhost'
                     aoss_host = env_aoss_host
                     port = int(env_port) if env_port else 8182
                     aoss_port = int(env_aoss_port) if env_aoss_port else 443
                     region_override = env_region or region
 
-                    # Create config with values to trigger validation
-                    neptune_config = NeptuneProviderConfig(
-                        host=host,
-                        aoss_host=aoss_host,
-                        port=port,
-                        aoss_port=aoss_port,
-                        region=region_override,
-                    )
+                # Always validate and normalize through NeptuneProviderConfig
+                # This ensures protocol prefix is added if missing
+                neptune_config = NeptuneProviderConfig(
+                    host=host,
+                    aoss_host=aoss_host,
+                    port=port,
+                    aoss_port=aoss_port,
+                    region=region_override,
+                )
 
-                    # Use normalized values from config (protocol may have been auto-added)
-                    host = neptune_config.host
-                    aoss_host = neptune_config.aoss_host
-                    port = neptune_config.port
-                    aoss_port = neptune_config.aoss_port
-                    region_override = neptune_config.region
+                # Use normalized values from config (protocol may have been auto-added)
+                host = neptune_config.host
+                aoss_host = neptune_config.aoss_host
+                port = neptune_config.port
+                aoss_port = neptune_config.aoss_port
+                region_override = neptune_config.region
 
                 if not aoss_host:
                     raise ValueError(

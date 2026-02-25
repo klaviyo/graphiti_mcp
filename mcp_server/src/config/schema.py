@@ -90,6 +90,10 @@ class OpenAIProviderConfig(BaseModel):
     api_key: str | None = None
     api_url: str = 'https://api.openai.com/v1'
     organization_id: str | None = None
+    extra_headers: dict[str, str] | None = Field(
+        default=None,
+        description='Custom HTTP headers to include in API requests (e.g., X-Session-ID for gateways)',
+    )
 
 
 class AzureOpenAIProviderConfig(BaseModel):

@@ -127,8 +127,60 @@ class LLMClientFactory:
                 # Use the same model for both main and small model slots
                 small_model = config.model
 
+                # Build custom headers from multiple sources (priority order)
+                import json
+                import os
+
+                custom_headers: dict[str, str] = {}
+
+                # Source 1: Config file extra_headers (highest priority)
+                if config.providers.openai.extra_headers:
+                    custom_headers.update(config.providers.openai.extra_headers)
+                    logger.info(
+                        f'Loaded {len(config.providers.openai.extra_headers)} custom headers from config'
+                    )
+
+                # Source 2: OPENAI_EXTRA_HEADERS environment variable (JSON)
+                env_headers_json = os.environ.get('OPENAI_EXTRA_HEADERS')
+                if env_headers_json:
+                    try:
+                        env_headers = json.loads(env_headers_json)
+                        custom_headers.update(env_headers)
+                        logger.info(
+                            f'Loaded {len(env_headers)} custom headers from OPENAI_EXTRA_HEADERS'
+                        )
+                    except json.JSONDecodeError as e:
+                        logger.warning(f'Failed to parse OPENAI_EXTRA_HEADERS: {e}')
+
+                # Source 3: X_SESSION_ID environment variable (single header)
+                session_id = os.environ.get('X_SESSION_ID')
+                if session_id:
+                    custom_headers['X-Session-ID'] = session_id
+                    logger.info('Using X-Session-ID from environment variable')
+
+                # Log active custom headers (without values for security)
+                if custom_headers:
+                    header_names = ', '.join(custom_headers.keys())
+                    logger.info(f'Using custom headers for OpenAI API: {header_names}')
+
+                # Create OpenAI client with custom headers
+                from openai import AsyncOpenAI
+
+                base_url = (
+                    config.providers.openai.api_url
+                    if config.providers.openai.api_url
+                    else 'https://api.openai.com/v1'
+                )
+
+                openai_client = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    default_headers=custom_headers if custom_headers else None,
+                )
+
                 llm_config = CoreLLMConfig(
                     api_key=api_key,
+                    base_url=base_url,
                     model=config.model,
                     small_model=small_model,
                     temperature=config.temperature,
@@ -141,10 +193,17 @@ class LLMClientFactory:
 
                 # Only pass reasoning/verbosity parameters for reasoning models (gpt-5 family)
                 if is_reasoning_model:
-                    return OpenAIClient(config=llm_config, reasoning='minimal', verbosity='low')
+                    return OpenAIClient(
+                        config=llm_config,
+                        client=openai_client,
+                        reasoning='minimal',
+                        verbosity='low',
+                    )
                 else:
                     # For non-reasoning models, explicitly pass None to disable these parameters
-                    return OpenAIClient(config=llm_config, reasoning=None, verbosity=None)
+                    return OpenAIClient(
+                        config=llm_config, client=openai_client, reasoning=None, verbosity=None
+                    )
 
             case 'azure_openai':
                 if not HAS_AZURE_LLM:
@@ -274,15 +333,54 @@ class EmbedderFactory:
                 api_key = config.providers.openai.api_key
                 _validate_api_key('OpenAI Embedder', api_key, logger)
 
+                # Build custom headers from multiple sources (same as LLM client)
+                import json
+                import os
+
+                custom_headers: dict[str, str] = {}
+
+                # Source 1: Config file extra_headers (highest priority)
+                if config.providers.openai.extra_headers:
+                    custom_headers.update(config.providers.openai.extra_headers)
+
+                # Source 2: OPENAI_EXTRA_HEADERS environment variable (JSON)
+                env_headers_json = os.environ.get('OPENAI_EXTRA_HEADERS')
+                if env_headers_json:
+                    try:
+                        env_headers = json.loads(env_headers_json)
+                        custom_headers.update(env_headers)
+                    except json.JSONDecodeError:
+                        pass  # Already logged in LLM client
+
+                # Source 3: X_SESSION_ID environment variable (single header)
+                session_id = os.environ.get('X_SESSION_ID')
+                if session_id:
+                    custom_headers['X-Session-ID'] = session_id
+
+                # Create OpenAI client with custom headers if any
+                from openai import AsyncOpenAI
+
+                base_url = (
+                    config.providers.openai.api_url
+                    if config.providers.openai.api_url
+                    else 'https://api.openai.com/v1'
+                )
+
+                openai_client = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    default_headers=custom_headers if custom_headers else None,
+                )
+
                 from graphiti_core.embedder.openai import OpenAIEmbedderConfig
 
                 embedder_config = OpenAIEmbedderConfig(
                     api_key=api_key,
                     embedding_model=config.model,
-                    base_url=config.providers.openai.api_url,  # Support custom endpoints like Ollama
+                    base_url=base_url,
                     embedding_dim=config.dimensions,  # Support custom embedding dimensions
                 )
-                return OpenAIEmbedder(config=embedder_config)
+                return OpenAIEmbedder(config=embedder_config, client=openai_client)
 
             case 'azure_openai':
                 if not HAS_AZURE_EMBEDDER:

@@ -5,7 +5,7 @@ description = "Graphiti MCP Server"
 readme = "README.md"
 requires-python = ">=3.10,<4"
 dependencies = [
-    "mcp==1.9.4",  # Pinned to avoid DNS rebinding protection in v1.23.0+
+    "mcp>=1.26.0",  # Updated to fix CVE-2025-53365 (ClosedResourceError crash)
     "openai>=1.91.0",
     "graphiti-core[falkordb,neptune]==0.28.1",
     "pydantic-settings>=2.0.0",

@@ -122,6 +122,26 @@ async def retrieve_previous_episodes_bulk(
         (episode, previous_episodes_list[i]) for i, episode in enumerate(episodes)
     ]
 
+    # Validate tuple structure to catch malformed episode contexts early
+    for i, tup in enumerate(episode_tuples):
+        if not isinstance(tup, tuple):
+            logger.error(
+                f'Invalid episode tuple at index {i}: expected tuple, got {type(tup).__name__}'
+            )
+            logger.error(f'Tuple content: {tup}')
+            raise TypeError(
+                f'Episode context must contain tuples, got {type(tup).__name__} at index {i}'
+            )
+        if len(tup) != 2:
+            logger.error(
+                f'Invalid episode tuple at index {i}: expected 2 elements, got {len(tup)}'
+            )
+            logger.error(f'Tuple content: {tup}')
+            logger.error(f'Tuple element types: {[type(x).__name__ for x in tup]}')
+            raise ValueError(
+                f'Episode tuple must be 2-element tuple, got {len(tup)} elements at index {i}'
+            )
+
     return episode_tuples
 
 

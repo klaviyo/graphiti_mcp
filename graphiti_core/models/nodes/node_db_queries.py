@@ -122,7 +122,10 @@ EPISODIC_NODE_RETURN_NEPTUNE = """
     e.group_id AS group_id,
     e.source_description AS source_description,
     e.source AS source,
-    split(e.entity_edges, "|") AS entity_edges
+    CASE WHEN e.entity_edges IS NULL OR e.entity_edges = ''
+         THEN []
+         ELSE split(e.entity_edges, "|")
+    END AS entity_edges
 """
 
 
@@ -157,8 +160,11 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
             return f"""
                 MERGE (n:Entity {{uuid: $entity_data.uuid}})
                 {label_subquery}
-                SET n = removeKeyFromMap(removeKeyFromMap($entity_data, "labels"), "name_embedding")
-                SET n.name_embedding = join([x IN coalesce($entity_data.name_embedding, []) | toString(x) ], ",")
+                SET n.name = $entity_data.name,
+                    n.group_id = $entity_data.group_id,
+                    n.created_at = $entity_data.created_at,
+                    n.summary = $entity_data.summary,
+                    n.name_embedding = join([x IN coalesce($entity_data.name_embedding, []) | toString(x) ], ",")
                 RETURN n.uuid AS uuid
             """
         case _:
@@ -214,8 +220,11 @@ def get_entity_node_save_bulk_query(
                         UNWIND $nodes AS node
                         MERGE (n:Entity {{uuid: node.uuid}})
                         {labels}
-                        SET n = removeKeyFromMap(removeKeyFromMap(node, "labels"), "name_embedding")
-                        SET n.name_embedding = join([x IN coalesce(node.name_embedding, []) | toString(x) ], ",")
+                        SET n.name = node.name,
+                            n.group_id = node.group_id,
+                            n.created_at = node.created_at,
+                            n.summary = node.summary,
+                            n.name_embedding = join([x IN coalesce(node.name_embedding, []) | toString(x) ], ",")
                         RETURN n.uuid AS uuid
                     """
                 )

@@ -638,25 +638,38 @@ class Graphiti:
         # Get unique nodes per episode
         nodes_by_episode_unique: dict[str, list[EntityNode]] = {}
         nodes_uuid_set: set[str] = set()
-        for episode, _ in episode_context:
-            nodes_by_episode_unique[episode.uuid] = []
-            nodes = [nodes_by_uuid[node.uuid] for node in nodes_by_episode[episode.uuid]]
-            for node in nodes:
-                if node.uuid not in nodes_uuid_set:
-                    nodes_by_episode_unique[episode.uuid].append(node)
-                    nodes_uuid_set.add(node.uuid)
+        try:
+            # Handle variable-length tuples in episode_context
+            for item in episode_context:
+                episode = item[0]  # Extract episode (first element)
+                nodes_by_episode_unique[episode.uuid] = []
+                nodes = [nodes_by_uuid[node.uuid] for node in nodes_by_episode[episode.uuid]]
+                for node in nodes:
+                    if node.uuid not in nodes_uuid_set:
+                        nodes_by_episode_unique[episode.uuid].append(node)
+                        nodes_uuid_set.add(node.uuid)
+        except (ValueError, IndexError, TypeError) as e:
+            logger.error(f'Episode context unpacking failed: {str(e)}')
+            logger.error(f'episode_context type: {type(episode_context)}')
+            if episode_context:
+                logger.error(f'First element: {episode_context[0]}')
+                logger.error(f'First element type: {type(episode_context[0])}')
+                if isinstance(episode_context[0], tuple):
+                    logger.error(f'First tuple length: {len(episode_context[0])}')
+                    logger.error(f'First tuple contents: {[type(x) for x in episode_context[0]]}')
+            raise
 
         # Resolve nodes
         node_results = await semaphore_gather(
             *[
                 resolve_extracted_nodes(
                     self.clients,
-                    nodes_by_episode_unique[episode.uuid],
-                    episode,
-                    previous_episodes,
+                    nodes_by_episode_unique[item[0].uuid],
+                    item[0],  # episode
+                    item[1],  # previous_episodes
                     entity_types,
                 )
-                for episode, previous_episodes in episode_context
+                for item in episode_context
             ]
         )
 
@@ -684,12 +697,12 @@ class Graphiti:
             *[
                 extract_attributes_from_nodes(
                     self.clients,
-                    nodes_by_episode_unique[episode.uuid],
-                    episode,
-                    previous_episodes,
+                    nodes_by_episode_unique[item[0].uuid],
+                    item[0],  # episode
+                    item[1],  # previous_episodes
                     entity_types,
                 )
-                for episode, previous_episodes in episode_context
+                for item in episode_context
             ]
         )
 

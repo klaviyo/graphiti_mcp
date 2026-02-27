@@ -113,7 +113,7 @@ EOF
 RUN chmod +x /start-services.sh
 
 # Add Docker labels with version information
-ARG MCP_SERVER_VERSION=1.0.2
+ARG MCP_SERVER_VERSION=1.0.3
 ARG BUILD_DATE
 ARG VCS_REF
 LABEL org.opencontainers.image.title="FalkorDB + Graphiti MCP Server" \

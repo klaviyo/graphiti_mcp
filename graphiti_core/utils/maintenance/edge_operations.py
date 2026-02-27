@@ -536,10 +536,20 @@ async def resolve_extracted_edge(
         for i, existing_edge in enumerate(existing_edges)
     ]
 
+    # Build edge types context for the prompt
+    edge_types_context = []
+    if edge_type_candidates:
+        for type_name, type_model in edge_type_candidates.items():
+            edge_types_context.append({
+                'fact_type_name': type_name,
+                'fact_type_description': type_model.__doc__,
+            })
+    
     context = {
         'existing_edges': related_edges_context,
         'new_edge': extracted_edge.fact,
         'edge_invalidation_candidates': invalidation_edge_candidates_context,
+        'edge_types': edge_types_context,
     }
 
     if related_edges or existing_edges:

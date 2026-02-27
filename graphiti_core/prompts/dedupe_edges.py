@@ -41,6 +41,12 @@ class Versions(TypedDict):
 
 
 def resolve_edge(context: dict[str, Any]) -> list[Message]:
+    existing_facts_count = len(context.get('existing_edges', []))
+    invalidation_candidates_count = len(context.get('edge_invalidation_candidates', []))
+
+    existing_range = f'0 to {existing_facts_count - 1}' if existing_facts_count > 0 else 'none (empty list)'
+    invalidation_range = f'0 to {invalidation_candidates_count - 1}' if invalidation_candidates_count > 0 else 'none (empty list)'
+
     return [
         Message(
             role='system',
@@ -50,16 +56,28 @@ def resolve_edge(context: dict[str, Any]) -> list[Message]:
         Message(
             role='user',
             content=f"""
+        You will analyze a NEW FACT against two separate lists of existing facts.
+        
         Task:
         You will receive TWO lists of facts with CONTINUOUS idx numbering across both lists.
         EXISTING FACTS are indexed first, followed by FACT INVALIDATION CANDIDATES.
-
+        
+        ═══════════════════════════════════════════════════════════════
+        LIST A: EXISTING FACTS (for duplicate detection)
+        ═══════════════════════════════════════════════════════════════
+        Count: {existing_facts_count} facts
+        Valid idx range: {existing_range}
+        
         1. DUPLICATE DETECTION:
            - If the NEW FACT represents identical factual information as any fact in EXISTING FACTS, return those idx values in duplicate_facts.
            - Facts with similar information that contain key differences should NOT be marked as duplicates.
            - If no duplicates, return an empty list for duplicate_facts.
 
-        2. CONTRADICTION DETECTION:
+        2. FACT TYPE CLASSIFICATION:
+           - Given the predefined FACT TYPES, determine if the NEW FACT should be classified as one of these types.
+           - Return the fact type as fact_type or DEFAULT if NEW FACT is not one of the FACT TYPES.
+
+        3. CONTRADICTION DETECTION:
            - Determine which facts the NEW FACT contradicts from either list.
            - A fact from EXISTING FACTS can be both a duplicate AND contradicted (e.g., semantically the same but the new fact updates/supersedes it).
            - Return all contradicted idx values in contradicted_facts.
@@ -74,17 +92,63 @@ def resolve_edge(context: dict[str, Any]) -> list[Message]:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
 
+        <FACT TYPES>
+        {context['edge_types']}
+        </FACT TYPES>
+
         <EXISTING FACTS>
         {context['existing_edges']}
-        </EXISTING FACTS>
 
-        <FACT INVALIDATION CANDIDATES>
+        ═══════════════════════════════════════════════════════════════
+        LIST B: FACT INVALIDATION CANDIDATES (for contradiction detection)
+        ═══════════════════════════════════════════════════════════════
+        Count: {invalidation_candidates_count} facts
+        Valid idx range: {invalidation_range}
+
         {context['edge_invalidation_candidates']}
-        </FACT INVALIDATION CANDIDATES>
 
-        <NEW FACT>
+        ═══════════════════════════════════════════════════════════════
+        NEW FACT TO ANALYZE
+        ═══════════════════════════════════════════════════════════════
         {context['new_edge']}
-        </NEW FACT>
+
+        ═══════════════════════════════════════════════════════════════
+        FACT TYPES FOR CLASSIFICATION
+        ═══════════════════════════════════════════════════════════════
+        {context['edge_types']}
+
+        ═══════════════════════════════════════════════════════════════
+        YOUR RESPONSE MUST INCLUDE THREE FIELDS
+        ═══════════════════════════════════════════════════════════════
+
+        1. duplicate_facts (list of integers)
+           SOURCE: Use idx values ONLY from LIST A (EXISTING FACTS)
+           VALID RANGE: {existing_range}
+           PURPOSE: Identify which facts in LIST A are duplicates of the NEW FACT
+           CRITERIA: Facts must represent identical factual information (minor wording differences OK)
+           NOTE: Facts with key differences (especially numeric values) are NOT duplicates
+           IF NO DUPLICATES: Return empty list []
+
+        2. contradicted_facts (list of integers)
+           SOURCE: Use idx values ONLY from LIST B (FACT INVALIDATION CANDIDATES)
+           VALID RANGE: {invalidation_range}
+           PURPOSE: Identify which facts in LIST B are contradicted by the NEW FACT
+           CRITERIA: Facts that are logically incompatible with the NEW FACT
+           IF NO CONTRADICTIONS: Return empty list []
+
+        3. fact_type (string)
+           SOURCE: Choose from FACT TYPES listed above
+           PURPOSE: Classify the NEW FACT's type
+           DEFAULT: Return 'DEFAULT' if NEW FACT doesn't match any predefined FACT TYPES
+
+        ═══════════════════════════════════════════════════════════════
+        CRITICAL WARNINGS
+        ═══════════════════════════════════════════════════════════════
+        - LIST A and LIST B are COMPLETELY SEPARATE with INDEPENDENT indexing
+        - Do NOT use idx values from LIST B in duplicate_facts field
+        - Do NOT use idx values from LIST A in contradicted_facts field
+        - Each list starts indexing from 0 independently
+        - Verify your idx values are within the valid ranges specified above
         """,
         ),
     ]

@@ -210,6 +210,10 @@ class NeptuneDriver(GraphDriver):
         aoss_hostname = aoss_host.replace('https://', '').replace('http://', '')
 
         session = boto3.Session()
+
+        # Configure OpenSearch client with retry and timeout settings
+        # AWS OpenSearch Serverless has aggressive connection limits and may close
+        # connections prematurely. These settings help handle transient failures.
         self.aoss_client = OpenSearch(
             hosts=[{'host': aoss_hostname, 'port': aoss_port}],
             http_auth=Urllib3AWSV4SignerAuth(
@@ -218,7 +222,11 @@ class NeptuneDriver(GraphDriver):
             use_ssl=True,
             verify_certs=True,
             connection_class=Urllib3HttpConnection,
-            pool_maxsize=20,
+            pool_maxsize=10,  # Reduced from 20 to avoid overwhelming AOSS connection limits
+            timeout=30,  # 30 second timeout to prevent hanging connections
+            max_retries=5,  # Enable retry logic with exponential backoff
+            retry_on_timeout=True,  # Retry when timeout occurs
+            retry_on_status=[502, 503, 504],  # Retry on gateway errors and service unavailable
         )
 
         # Instantiate Neptune operations
@@ -428,7 +436,18 @@ class NeptuneDriverSession(GraphDriverSession):
         if isinstance(query, list):
             res = None
             for q in query:
-                res = await self.driver.execute_query(q, **kwargs)
+                # Handle both tuple (query, params) format and plain string queries
+                if isinstance(q, tuple):
+                    if len(q) >= 2:
+                        # Unpack query and params from tuple
+                        query_str, params = q[0], q[1]
+                        res = await self.driver.execute_query(query_str, **params)
+                    else:
+                        # Single element tuple, treat as query string
+                        res = await self.driver.execute_query(str(q[0]), **kwargs)
+                else:
+                    # Plain string query
+                    res = await self.driver.execute_query(q, **kwargs)
             return res
         else:
             return await self.driver.execute_query(str(query), **kwargs)

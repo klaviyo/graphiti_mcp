@@ -17,6 +17,7 @@ from graphiti_core.edges import EntityEdge
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_filters import SearchFilters
 from graphiti_core.utils.maintenance.graph_data_operations import clear_data
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
@@ -92,6 +93,12 @@ logging.getLogger('uvicorn.access').setLevel(logging.WARNING)  # Reduce access l
 logging.getLogger('mcp.server.streamable_http_manager').setLevel(
     logging.WARNING
 )  # Reduce MCP noise
+logging.getLogger('opensearch').setLevel(
+    logging.ERROR
+)  # Only log actual errors, not transient warnings
+logging.getLogger('urllib3.connectionpool').setLevel(
+    logging.ERROR
+)  # Suppress retry warnings
 
 
 # Patch uvicorn's logging config to use our format
@@ -144,9 +151,12 @@ API keys are provided for any language model operations.
 """
 
 # MCP server instance
+logger.info('DNS rebinding protection configured from settings')
+transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 mcp = FastMCP(
     'Graphiti Agent Memory',
     instructions=GRAPHITI_MCP_INSTRUCTIONS,
+    transport_security=transport_security
 )
 
 # Global services
@@ -166,7 +176,9 @@ class GraphitiService:
         self.semaphore_limit = semaphore_limit
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.client: Graphiti | None = None
-        self.entity_types = None
+        self.entity_types: dict[str, type[BaseModel]] | None = None
+        self.edge_types: dict[str, type[BaseModel]] | None = None
+        self.edge_type_map: dict[tuple[str, str], list[str]] | None = None
 
     async def initialize(self) -> None:
         """Initialize the Graphiti client with factory-created components."""
@@ -190,13 +202,20 @@ class GraphitiService:
             # Get database configuration
             db_config = DatabaseDriverFactory.create_config(self.config.database)
 
-            # Build entity types from configuration
-            custom_types = None
+            # Build entity types - use built-in types by default, merge with config overrides
+            custom_types: dict[str, type[BaseModel]] = {}
+
+            # Use built-in entity types from entity_types.py if enabled (default: True)
+            if self.config.graphiti.use_default_entity_types:
+                from models.entity_types import ENTITY_TYPES
+
+                custom_types.update(ENTITY_TYPES)
+                logger.info(f'Loaded {len(ENTITY_TYPES)} built-in entity types')
+
+            # Add/override with config-defined entity types
             if self.config.graphiti.entity_types:
-                custom_types = {}
                 for entity_type in self.config.graphiti.entity_types:
                     # Create a dynamic Pydantic model for each entity type
-                    # Note: Don't use 'name' as it's a protected Pydantic attribute
                     entity_model = type(
                         entity_type.name,
                         (BaseModel,),
@@ -205,9 +224,41 @@ class GraphitiService:
                         },
                     )
                     custom_types[entity_type.name] = entity_model
+                logger.info(
+                    f'Added {len(self.config.graphiti.entity_types)} config-defined entity types'
+                )
 
             # Store entity types for later use
-            self.entity_types = custom_types
+            self.entity_types = custom_types if custom_types else None
+
+            # Build edge types from configuration
+            edge_types: dict[str, type[BaseModel]] = {}
+            edge_type_map: dict[tuple[str, str], list[str]] = {}
+
+            if self.config.graphiti.edge_types:
+                for edge_type_config in self.config.graphiti.edge_types:
+                    # Create a dynamic Pydantic model for each edge type
+                    edge_model = type(
+                        edge_type_config.name,
+                        (BaseModel,),
+                        {
+                            '__doc__': edge_type_config.description,
+                        },
+                    )
+                    edge_types[edge_type_config.name] = edge_model
+
+                    # Build edge_type_map: (source_type, target_type) -> [edge_type_names]
+                    for source_type in edge_type_config.source_entity_types:
+                        for target_type in edge_type_config.target_entity_types:
+                            key = (source_type, target_type)
+                            if key not in edge_type_map:
+                                edge_type_map[key] = []
+                            edge_type_map[key].append(edge_type_config.name)
+
+                logger.info(f'Loaded {len(edge_types)} edge types with type mappings')
+
+            self.edge_types = edge_types if edge_types else None
+            self.edge_type_map = edge_type_map if edge_type_map else None
 
             # Initialize Graphiti client with appropriate driver
             try:
@@ -334,9 +385,15 @@ class GraphitiService:
 
             if self.entity_types:
                 entity_type_names = list(self.entity_types.keys())
-                logger.info(f'Using custom entity types: {", ".join(entity_type_names)}')
+                logger.info(f'Using entity types: {", ".join(entity_type_names)}')
             else:
-                logger.info('Using default entity types')
+                logger.info('No custom entity types configured')
+
+            if self.edge_types:
+                edge_type_names = list(self.edge_types.keys())
+                logger.info(f'Using edge types: {", ".join(edge_type_names)}')
+            else:
+                logger.info('No custom edge types configured - using default RELATES_TO')
 
             logger.info(f'Using database: {self.config.database.provider}')
             logger.info(f'Using group_id: {self.config.graphiti.group_id}')
@@ -362,6 +419,7 @@ async def add_memory(
     source: str = 'text',
     source_description: str = '',
     uuid: str | None = None,
+    update_communities: bool = False,
 ) -> SuccessResponse | ErrorResponse:
     """Add an episode to memory. This is the primary way to add information to the graph.
 
@@ -381,6 +439,10 @@ async def add_memory(
                                - 'message': For conversation-style content
         source_description (str, optional): Description of the source
         uuid (str, optional): Optional UUID for the episode
+        update_communities (bool, optional): Whether to update community nodes after processing.
+                                            Community nodes enable graph summarization and community-based search.
+                                            Defaults to False for performance, but recommended for building
+                                            connected knowledge graphs.
 
     Examples:
         # Adding plain text content
@@ -392,13 +454,15 @@ async def add_memory(
             group_id="some_arbitrary_string"
         )
 
-        # Adding structured JSON data
+        # Adding structured JSON data with community updates
         # NOTE: episode_body should be a JSON string (standard JSON escaping)
+        # For JSON source, reference_time is automatically extracted from common timestamp fields
         add_memory(
             name="Customer Profile",
-            episode_body='{"company": {"name": "Acme Technologies"}, "products": [{"id": "P001", "name": "CloudSync"}, {"id": "P002", "name": "DataMiner"}]}',
+            episode_body='{"company": {"name": "Acme Technologies"}, "reference_time": "2025-01-15T10:30:00Z", "products": [{"id": "P001", "name": "CloudSync"}]}',
             source="json",
-            source_description="CRM data"
+            source_description="CRM data",
+            update_communities=True
         )
     """
     global graphiti_service, queue_service
@@ -429,6 +493,8 @@ async def add_memory(
             episode_type=episode_type,
             entity_types=graphiti_service.entity_types,
             uuid=uuid or None,  # Ensure None is passed if uuid is None
+            update_communities=update_communities,
+            edge_types=graphiti_service.edge_types,
         )
 
         return SuccessResponse(
@@ -942,7 +1008,7 @@ async def initialize_server() -> ServerConfig:
 
 
 async def run_mcp_server():
-    """Run the MCP server in the current event loop."""
+    """Run the MCP server in the current event loop (for stdio/sse only)."""
     # Initialize the server
     mcp_config = await initialize_server()
 
@@ -956,40 +1022,62 @@ async def run_mcp_server():
         )
         logger.info(f'Access the server at: http://{mcp.settings.host}:{mcp.settings.port}/sse')
         await mcp.run_sse_async()
-    elif mcp_config.transport == 'http':
-        # Use localhost for display if binding to 0.0.0.0
-        display_host = 'localhost' if mcp.settings.host == '0.0.0.0' else mcp.settings.host
-        logger.info(
-            f'Running MCP server with streamable HTTP transport on {mcp.settings.host}:{mcp.settings.port}'
-        )
-        logger.info('=' * 60)
-        logger.info('MCP Server Access Information:')
-        logger.info(f'  Base URL: http://{display_host}:{mcp.settings.port}/')
-        logger.info(f'  MCP Endpoint: http://{display_host}:{mcp.settings.port}/mcp/')
-        logger.info('  Transport: HTTP (streamable)')
-
-        # Show FalkorDB Browser UI access if enabled
-        if os.environ.get('BROWSER', '1') == '1':
-            logger.info(f'  FalkorDB Browser UI: http://{display_host}:3000/')
-
-        logger.info('=' * 60)
-        logger.info('For MCP clients, connect to the /mcp/ endpoint above')
-
-        # Configure uvicorn logging to match our format
-        configure_uvicorn_logging()
-
-        await mcp.run_streamable_http_async()
     else:
         raise ValueError(
-            f'Unsupported transport: {mcp_config.transport}. Use "sse", "stdio", or "http"'
+            f'Unsupported transport: {mcp_config.transport}. Use "sse" or "stdio" for async mode'
         )
 
 
 def main():
     """Main function to run the Graphiti MCP server."""
     try:
-        # Run everything in a single event loop
-        asyncio.run(run_mcp_server())
+        # Parse config to determine transport type
+        # Set CONFIG_PATH env var for GraphitiConfig to load from
+        if 'CONFIG_PATH' not in os.environ:
+            os.environ['CONFIG_PATH'] = os.environ.get('GRAPHITI_CONFIG_PATH', 'config/config.yaml')
+
+        from config.schema import GraphitiConfig
+        config = GraphitiConfig()
+
+        if config.server.transport == 'http':
+            # For HTTP transport, initialize then run with uvicorn
+            async def init_only():
+                await initialize_server()
+
+            asyncio.run(init_only())
+
+            # Use localhost for display if binding to 0.0.0.0
+            display_host = 'localhost' if config.server.host == '0.0.0.0' else config.server.host
+            logger.info(
+                f'Running MCP server with streamable HTTP transport on {config.server.host}:{config.server.port}'
+            )
+            logger.info('=' * 60)
+            logger.info('MCP Server Access Information:')
+            logger.info(f'  Base URL: http://{display_host}:{config.server.port}/')
+            logger.info(f'  MCP Endpoint: http://{display_host}:{config.server.port}/mcp/')
+            logger.info('  Transport: HTTP (streamable)')
+
+            # Show FalkorDB Browser UI access if enabled
+            if os.environ.get('BROWSER', '1') == '1':
+                logger.info(f'  FalkorDB Browser UI: http://{display_host}:3000/')
+
+            logger.info('=' * 60)
+            logger.info('For MCP clients, connect to the /mcp/ endpoint above')
+
+            # Configure uvicorn logging to match our format
+            configure_uvicorn_logging()
+
+            # Run the ASGI app with uvicorn - this properly handles all async lifecycle
+            import uvicorn
+            uvicorn.run(
+                mcp.streamable_http_app,
+                host=config.server.host,
+                port=config.server.port,
+                log_config=None,  # Use our custom logging configuration
+            )
+        else:
+            # For stdio/sse transports, use async mode
+            asyncio.run(run_mcp_server())
     except KeyboardInterrupt:
         logger.info('Server shutting down...')
     except Exception as e:

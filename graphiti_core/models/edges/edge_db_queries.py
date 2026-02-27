@@ -76,9 +76,17 @@ def get_entity_edge_save_query(provider: GraphProvider, has_aoss: bool = False) 
                 MATCH (source:Entity {uuid: $edge_data.source_uuid})
                 MATCH (target:Entity {uuid: $edge_data.target_uuid})
                 MERGE (source)-[e:RELATES_TO {uuid: $edge_data.uuid}]->(target)
-                SET e = removeKeyFromMap(removeKeyFromMap($edge_data, "fact_embedding"), "episodes")
-                SET e.fact_embedding = join([x IN coalesce($edge_data.fact_embedding, []) | toString(x) ], ",")
-                SET e.episodes = join($edge_data.episodes, ",")
+                SET e.group_id = $edge_data.group_id,
+                    e.source_node_uuid = $edge_data.source_uuid,
+                    e.target_node_uuid = $edge_data.target_uuid,
+                    e.created_at = $edge_data.created_at,
+                    e.name = $edge_data.name,
+                    e.fact = $edge_data.fact,
+                    e.expired_at = $edge_data.expired_at,
+                    e.valid_at = $edge_data.valid_at,
+                    e.invalid_at = $edge_data.invalid_at,
+                    e.fact_embedding = join([x IN coalesce($edge_data.fact_embedding, []) | toString(x) ], ","),
+                    e.episodes = join($edge_data.episodes, ",")
                 RETURN $edge_data.uuid AS uuid
             """
         case GraphProvider.KUZU:
@@ -140,9 +148,17 @@ def get_entity_edge_save_bulk_query(provider: GraphProvider, has_aoss: bool = Fa
                 MATCH (source:Entity {uuid: edge.source_node_uuid})
                 MATCH (target:Entity {uuid: edge.target_node_uuid})
                 MERGE (source)-[r:RELATES_TO {uuid: edge.uuid}]->(target)
-                SET r = removeKeyFromMap(removeKeyFromMap(edge, "fact_embedding"), "episodes")
-                SET r.fact_embedding = join([x IN coalesce(edge.fact_embedding, []) | toString(x) ], ",")
-                SET r.episodes = join(edge.episodes, ",")
+                SET r.group_id = edge.group_id,
+                    r.source_node_uuid = edge.source_node_uuid,
+                    r.target_node_uuid = edge.target_node_uuid,
+                    r.created_at = edge.created_at,
+                    r.name = edge.name,
+                    r.fact = edge.fact,
+                    r.expired_at = edge.expired_at,
+                    r.valid_at = edge.valid_at,
+                    r.invalid_at = edge.invalid_at,
+                    r.fact_embedding = join([x IN coalesce(edge.fact_embedding, []) | toString(x) ], ","),
+                    r.episodes = join(edge.episodes, ",")
                 RETURN edge.uuid AS uuid
             """
         case GraphProvider.KUZU:

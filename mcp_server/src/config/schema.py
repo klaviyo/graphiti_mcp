@@ -90,6 +90,10 @@ class OpenAIProviderConfig(BaseModel):
     api_key: str | None = None
     api_url: str = 'https://api.openai.com/v1'
     organization_id: str | None = None
+    extra_headers: dict[str, str] | None = Field(
+        default=None,
+        description='Custom HTTP headers to include in API requests (e.g., X-Session-ID for gateways)',
+    )
 
 
 class AzureOpenAIProviderConfig(BaseModel):
@@ -263,6 +267,21 @@ class EntityTypeConfig(BaseModel):
     description: str
 
 
+class EdgeTypeConfig(BaseModel):
+    """Edge type configuration for relationship classification."""
+
+    name: str
+    description: str
+    source_entity_types: list[str] = Field(
+        default_factory=lambda: ['Entity'],
+        description='List of source entity type names this edge can connect from',
+    )
+    target_entity_types: list[str] = Field(
+        default_factory=lambda: ['Entity'],
+        description='List of target entity type names this edge can connect to',
+    )
+
+
 class GraphitiAppConfig(BaseModel):
     """Graphiti-specific configuration."""
 
@@ -270,6 +289,14 @@ class GraphitiAppConfig(BaseModel):
     episode_id_prefix: str | None = Field(default='', description='Episode ID prefix')
     user_id: str = Field(default='mcp_user', description='User ID')
     entity_types: list[EntityTypeConfig] = Field(default_factory=list)
+    edge_types: list[EdgeTypeConfig] = Field(
+        default_factory=list,
+        description='Custom edge types for relationship classification',
+    )
+    use_default_entity_types: bool = Field(
+        default=True,
+        description='Whether to use built-in entity types from entity_types.py',
+    )
 
     def model_post_init(self, __context) -> None:
         """Convert None to empty string for episode_id_prefix."""

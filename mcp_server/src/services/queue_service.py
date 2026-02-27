@@ -1,10 +1,13 @@
 """Queue service for managing episode processing."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
+
+from graphiti_core.utils.datetime_utils import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,36 @@ class QueueService:
         self._graphiti_client = graphiti_client
         logger.info('Queue service initialized with graphiti client')
 
+    def _extract_reference_time_from_json(self, content: str) -> datetime | None:
+        """Extract reference_time from JSON content if available.
+
+        Args:
+            content: The episode content (potentially JSON)
+
+        Returns:
+            Extracted datetime or None if not found/invalid
+        """
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict):
+                # Check common timestamp field names
+                for field in ['reference_time', 'timestamp', 'created_at', 'message_ts', 'time']:
+                    if field in data:
+                        ts_value = data[field]
+                        if isinstance(ts_value, str):
+                            try:
+                                # Handle ISO format with Z suffix
+                                dt = datetime.fromisoformat(ts_value.replace('Z', '+00:00'))
+                                return ensure_utc(dt)
+                            except ValueError:
+                                continue
+                        elif isinstance(ts_value, int | float):
+                            # Unix timestamp
+                            return datetime.fromtimestamp(ts_value, tz=timezone.utc)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return None
+
     async def add_episode(
         self,
         group_id: str,
@@ -107,6 +140,9 @@ class QueueService:
         episode_type: Any,
         entity_types: Any,
         uuid: str | None,
+        update_communities: bool = False,
+        reference_time: datetime | None = None,
+        edge_types: dict[str, Any] | None = None,
     ) -> int:
         """Add an episode for processing.
 
@@ -118,12 +154,27 @@ class QueueService:
             episode_type: Type of the episode
             entity_types: Entity types for extraction
             uuid: Episode UUID
+            update_communities: Whether to update community nodes after processing
+            reference_time: Optional reference time for the episode (extracted from content for JSON)
+            edge_types: Optional edge type definitions for relationship classification
 
         Returns:
             The position in the queue
         """
         if self._graphiti_client is None:
             raise RuntimeError('Queue service not initialized. Call initialize() first.')
+
+        # Determine reference time: use provided, extract from JSON content, or use current time
+        effective_reference_time = reference_time
+        if effective_reference_time is None:
+            # Try to extract from JSON content
+            from graphiti_core.nodes import EpisodeType
+
+            if episode_type == EpisodeType.json:
+                effective_reference_time = self._extract_reference_time_from_json(content)
+
+        if effective_reference_time is None:
+            effective_reference_time = datetime.now(timezone.utc)
 
         async def process_episode():
             """Process the episode using the graphiti client."""
@@ -137,15 +188,19 @@ class QueueService:
                     source_description=source_description,
                     source=episode_type,
                     group_id=group_id,
-                    reference_time=datetime.now(timezone.utc),
+                    reference_time=effective_reference_time,
                     entity_types=entity_types,
                     uuid=uuid,
+                    update_communities=update_communities,
+                    edge_types=edge_types,
                 )
 
                 logger.info(f'Successfully processed episode {uuid} for group {group_id}')
 
             except Exception as e:
+                import traceback
                 logger.error(f'Failed to process episode {uuid} for group {group_id}: {str(e)}')
+                logger.error(f'Full traceback:\n{traceback.format_exc()}')
                 raise
 
         # Use the existing add_episode_task method to queue the processing
